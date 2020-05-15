@@ -11,7 +11,7 @@ With the transistors in the circuit, the pin requirements for one strip is actua
 
 I am using IRLB8721 MOSFET N-Channel Transistors which are more than good enough for the 12V 3A power supply I am using. Use whatever you want though that has a gate that can be triggered by the 5v Arduino pin and can handle the amps your strips need is good enough.
 
-I'll include a ~rough~ mockup of the circuit somewhere in the files to this if I can.
+I'll include a rough mockup of the circuit somewhere in the files to this if I can.
 
 The last note I have is that you can actually skip the Arduino altogether and run the Python script in micropython on an ESP8266 or similar chip. With the right board, you don't need to keep a computer connected at all, as you can connect an ESP8266 (with a wifi card) to your network through the boot file, then upload the full python script with the Spotipy library to the ESP8266, and have it run completely independently. This is a change I'm looking at making shortly, as Python is a language I'm much more confident in than Processing.
 
