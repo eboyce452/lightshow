@@ -1,4 +1,4 @@
-### This is lightshow.py V2.1, a script with the pyrfirmata library to control an arduino running the firmata library
+### This is lightshow.py V3, a script with the pyrfirmata library to control an arduino running the firmata library
 ### The code uses the Spotify API to call the ID of the track that is playing on the current user's Spotify account, then uses the same API to get the tempo (aka BPM)
 ### It then takes that information and uses it to drive a series of RBG lightstrips in combination with IRLB8721 MOSFET N-Channel Transistors arranged into AND gates. (I don't know if calling it charlieplexing is too generous or not) I'll add in a circuit diagram to the github so people can copy that.
 ### If you're reading these comments and thinking "holy moly, he needs to chill", just know that I wanted to over-comment rather than the opposite. Also, as a beginner who has tried to read other people's code, you guys need to acknowledge that I'm a dummy and have no idea what any of your stuff does.
@@ -14,6 +14,7 @@ import spotipy
 import sys
 import spotipy.util as util
 
+from threading import Thread
 from pandas.io.json import json_normalize
 from spotipy.oauth2 import SpotifyClientCredentials
 
@@ -23,16 +24,16 @@ glob_counter = 0
 
 ## Copy and pasted code from the library examples for authorizing the Spotify API through OAuth2/util
 
-client_id = 'Your Client ID'
-client_secret  = 'Your Client Secret'
-redirect_uri = 'Whatever URI Feels Good'
+client_id = 'd09b44e890e448e99b9572a7aca6d08b'
+client_secret  = '258d2d8c6674405bbc58d1ad52ee85f7'
+redirect_uri = 'http://localhost:50106'
 scope = 'user-read-currently-playing'
-token = util.prompt_for_user_token('Username', scope, client_id=client_id, client_secret=client_secret, redirect_uri=redirect_uri)
+token = util.prompt_for_user_token('12120950195', scope, client_id=client_id, client_secret=client_secret, redirect_uri=redirect_uri)
 spotify = spotipy.Spotify(auth=token)
 
 ## Setting up the board to send serial data for firmata. You only need PWM for different colors, not for the MOSFETs turning on the strips themselves.
 
-board = pyfirmata.Arduino('Get the COM port from the Arduino IDE')
+board = pyfirmata.Arduino('COM3')
 
 ## Declare the pins controlling the strips themselves as digital outputs
 
@@ -129,13 +130,12 @@ def pwm_strips():
 
     return
 
-## As you will see below, there are two similar looking functions below: check_bpm() and check_song().
-## The reason to create two functions instead of running the check_bpm every time is because check_bpm() has two API calls, which takes an average of ~0.10 seconds longer depending on connection.
-## By creating another function that just checks the song, you can run the check more frequently so that the delay in BPM change between songs is shorter, but without sacrificing performance.
-## If there is a way to frequently, or even constantly, check for a song change through the API without interrupting the light pattern loop please let me know. I have looked into threading, but it's a bit beyond me at the moment.
-
+#### 5/15/2020 the check_bpm() function was updated and the check_song() function was taken out.
+#### Thanks to a ton of help from jsbueno on stackoverflow, the code now implements threading so that the API calls and lights don't have to wait on each other quite so much.
+#### There is another version made that uses asyncio, but while running tests on the average speed across 25 iterations, I got the following data: normal code = 0.676 seconds, asyncio = 0.546 seconds, and threading = 0.420 seconds. So I just went with the fastest tested concurrency method
+        
 def check_bpm():
-    
+
     ## Seconds_per_beat and current_track are declared as global variables so that they can be used between functions. I know that I could have just made a class and put the functions in there, but I am unfamiliar with classes and I don't think there's an unmatched benefit to it
     ## The default for if there is no current_track is BLEACH by BROCKHAMPTON as mentioned below. This is just to give the program something to do while it waits for you to play something.
     ## You could also easily adjust it so that it just keeps the lights off if nothing is playing, and that totally works, but these lights are for ambiance at a house party so I don't want them to ever be off or not running through the functions to make them light.
@@ -147,52 +147,26 @@ def check_bpm():
     ## The current track ID is assigned to the global variable 'current_track' and is then used to get the tempo through spotify.audio_features()
     ## There is another option besides using json_normalize for each API call. I also experimented with just parsing the json object to get the info I wanted, but it ran slower, so I scrapped it. If there's an even faster option let me know.
 
-    current_track = spotify.current_user_playing_track()
-    if current_track is None:
-        current_track = '0dWOFwdXrbBUYqD9DLsoyK'
-        features = json_normalize(spotify.audio_features(current_track))
-        tempo = float(features['tempo'].iloc[0])
-        seconds_per_beat = 60/tempo
-    else:
-        current_track = json_normalize(current_track)
-        current_track = str(current_track['item.id'].iloc[0])
-        features = json_normalize(spotify.audio_features(current_track))
-        tempo = float(features['tempo'].iloc[0])
-        seconds_per_beat = 60/tempo
+    while True:
+        current_track = spotify.current_user_playing_track()
+        if current_track is None:
+            seconds_per_beat = 0.5
+        else:
+            current_track = json_normalize(current_track)
+            current_track = str(current_track['item.id'].iloc[0])
+            features = json_normalize(spotify.audio_features(current_track))
+            tempo = float(features['tempo'].iloc[0])
+            seconds_per_beat = 60/tempo
+        time.sleep(1)
 
         ## Of note, the formula for seconds_per_beat comes from BPM. If there are x beats per minute, then 60 seconds divided by x beats per minute should give you the interval in seconds between beats.
         ## Also of note for people who haven't seen much music theory, some songs play drums and other beat-like sounds on subdivided intervals. So if the lights don't match the drums, it's because it's matching the tempo and not the actual sounds being played. It should still look good though.
 
-def check_song():
-    
-    global current_track
-    current_track = spotify.current_user_playing_track()
-    if current_track is None:
-        current_track = '0dWOFwdXrbBUYqD9DLsoyK'
-    else:
-        current_track = json_normalize(current_track)
-        current_track = str(current_track['item.id'].iloc[0])
-
-while True:
-
-## The following code block automatically sets the song to "BLEACH" by BROCKHAMPTON (aka: 0dWOFwdXrbBUYqD9DLsoyK) on the first iteration so that there is something to check against.
-## If there is no song playing, the default for the check_bpm() function is also "BLEACH" so the code will be able to loop without any data from the API.
-## When a song does start playing, it will trigger the check_bpm() function and beceome the new current track.
-
-    if glob_counter == 0:
-        checked_song = '0dWOFwdXrbBUYqD9DLsoyK'
-        check_bpm()
-        glob_counter += 1
-    check_song()
-    if checked_song != current_track:
-        check_bpm()
-        checked_song = current_track
-## Enter in code block for light patterns below:
-
-### iterations variable is used to ensure the code loops every 5 seconds despite tempo (any faster and the lag from the API check starts to add up)
-    iterations = int(round(5/seconds_per_beat/2,0))
-    for x in range(0,iterations+1):
+def main():
+    api_thread = Thread(target=check_bpm)
+    api_thread.start()
+    while True:
         pwm_strips()
-## ----------------------------------------- ##
-## Lastly, the checked_song becomes the current_track so that the next time it checks, it can figure out if it's a different song.
-    checked_song = current_track
+## Setting defaut tempo value to 120 BPM. It doesn't matter too much because the tempo should update very quickly after the first API call.
+seconds_per_beat = 0.5
+main()
