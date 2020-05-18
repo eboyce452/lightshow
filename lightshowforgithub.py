@@ -17,18 +17,52 @@ import spotipy.util as util
 from threading import Thread
 from pandas.io.json import json_normalize
 from spotipy.oauth2 import SpotifyClientCredentials
+from spotipy import oauth2
 
                         ##### Functions ######
 
-## Copy and pasted code from the library examples for authorizing the Spotify API through OAuth2/util
+## Created new functions for getting a credential and refreshing it thanks to the work of gos on SOF.
+## The util.prompt_for_user_token() function actually doesn't call the refresh token function without setting a cache path. It was easier to just use the other authorization that had a dedicated refresh function
+## https://stackoverflow.com/questions/49239516/spotipy-refreshing-a-token-with-authorization-code-flow
+
+def oauth_credential():
+    client_id = 'enter client id in here'
+    client_secret  = 'client secret goes here'
+    redirect_uri = 'your favorite redirect uri'
+    scope = 'user-read-currently-playing'
+    ## Not sure why, but I didn't see gos pass 'username' as an argument in the SpotifyOAuth function. Without a username or cache path the .get_cached_token() function won't be able to find the cached token
+    sp_oauth = oauth2.SpotifyOAuth(client_id=client_id,client_secret=client_secret,redirect_uri=redirect_uri,scope=scope,username='put in your username')
+    token_info = sp_oauth.get_cached_token()
+    if not token_info:
+        auth_url = sp_oauth.get_authorize_url(show_dialog=True)
+        print(auth_url)
+        response = input('Paste the above link into your browser, then paste the redirect url here: ')
+
+        code = sp_oauth.parse_response_code(response)
+        token_info = sp_oauth.get_access_token(code)
+
+        token = token_info['access_token']
+    ## Not sure why this wasn't in gos' code, but if you've already authorized the app then you need to declare token still
+    else:
+        token = token_info['access_token']
+    spotify = spotipy.Spotify(auth=token)
+    return spotify
+
+def refresh():
+    global token_info, spotify
+    ## I added == True to the code as well to be more explicit about what we're checking for
+    if sp_oauth.is_token_expired(token_info) == True:
+        token_info = sp_oauth.refresh_access_token(token_info['refresh_token'])
+        token = token_info['access_token']
+        spotify = spotipy.Spotify(auth=token)
 
 def get_credential():
     
     client_id = 'client_id goes here'
     client_secret  = 'client_secret goes here'
-    redirect_uri = 'enter fave local host'
+    redirect_uri = 'your favorite uri'
     scope = 'user-read-currently-playing'
-    token = util.prompt_for_user_token('spotify username goes here', scope, client_id=client_id, client_secret=client_secret, redirect_uri=redirect_uri)
+    token = util.prompt_for_user_token('your username', scope, client_id=client_id, client_secret=client_secret, redirect_uri=redirect_uri)
     spotify = spotipy.Spotify(auth=token)
     return spotify
 
@@ -40,18 +74,14 @@ def off():
         color.write(0)
     
     return
+  
+## Split the huge pwm function into random_light and the pwm_strips functions. This just makes the if statements much shorter in the pwm_strips side
 
-## The following is the code to control the lights themselves. It creates a series of random variables that are then used to control the light patterns.
-## number_of_strips_to_light identifies how many light strips will go on during that cycle, I made it so that as you add or subtract strips, the only thing you need to adjust to the code is the strips array
-## which_strips uses random.sample to build a non-repeating list filled with indexes for the strips array
-## The list from which_strips is iterated through to light the appropriate strips
-
-def pwm_strips(tempo): # tempo is always set to seconds_per_beat. It's possible you can just use seconds_per_beat because it's global, but the threading was so unpredictable I wanted to be sure that the code was flowing as intended.
+def random_light():
 
     number_of_strips_to_light = random.randint(1,len(strips))
     which_strips = random.sample(range(0,len(strips)), number_of_strips_to_light)
     color = random.randint(0,6)
-    subdivision = random.randint(0,4)
     for x in which_strips:
         strips[x].write(1)
 
@@ -85,24 +115,45 @@ def pwm_strips(tempo): # tempo is always set to seconds_per_beat. It's possible 
             palette[1].write(pwm_setting)
             pwm_setting = random.randint(1,brightness*100)/100
             palette[2].write(pwm_setting)
+## The following is the code to control the lights themselves. It creates a series of random variables that are then used to control the light patterns.
+## number_of_strips_to_light identifies how many light strips will go on during that cycle, I made it so that as you add or subtract strips, the only thing you need to adjust to the code is the strips array
+## which_strips uses random.sample to build a non-repeating list filled with indexes for the strips array
+## The list from which_strips is iterated through to light the appropriate strips
+
+def pwm_strips(tempo): # tempo is always set to seconds_per_beat. It's possible you can just use seconds_per_beat because it's global, but the threading was so unpredictable I wanted to be sure that the code was flowing as intended.
+
+    subdivision = random.randint(0,4)
     
     ## I decided that just blinking on beat was a little too predictable and boring. Plus it can be really obvious when the code is lagging a bit behind the beat due to API calls
     ## So what I did here was I created a random variable called 'subdivision' and made it create a variable called 'divisor' that would equal 1, 2, or 4 so that it would divide the beat into halves or quarters randomly.
     ## This makes the pattern feel truly random and engaging. Especially with different sections lighting up. It's all personal preference though, so you can comment it out if you want.
 
+    ## Made things iterate so that they occupy a full beat. I'm playing around with different ways to make the pattern more appealing.
+    ## At a certain point I'll incorporate different random lighting patterns based on a song's tempo threshold and/or on other features through Spotify such as danceability or energy
     if subdivision == 0:
         divisor = 1
+        random_light()
+        time.sleep(tempo/divisor)
+        off()
+        time.sleep(tempo/divisor)
+
     if subdivision >= 3:
         divisor = 4
+        for loop in range(0,4):
+            random_light()
+            time.sleep(tempo/divisor)
+            off()
+            time.sleep(tempo/divisor)
     else:
         divisor = 2
+        for loop in range(0,2):
+            random_light()
+            time.sleep(tempo/divisor)
+            off()
+            time.sleep(tempo/divisor)
 
     ## The global variable seconds_per_beat is called here to set the delay equal to the bpm (along with any subdivision), which is what really makes the lights go with the music.
-
-    time.sleep(tempo/divisor)
-    off()
-    time.sleep(tempo/divisor)
-
+    
     return
         
 def check_bpm():
@@ -117,17 +168,16 @@ def check_bpm():
             current_track = spotify.current_user_playing_track()
         except:
             print('error: generating new credential')
-            spotify = get_credential()
+            refresh()
             current_track = spotify.current_user_playing_track()
         if current_track is None:
             seconds_per_beat = 10000 
             # I had experimented with defining a new variable to check if there was nothing playing, but I was running into so many issues with shared variables.
             # In order to make my life less hellish, I figured I could just set a variable I already knew worked to an arbitrarily high value. It works so I won't change it.
-            spotify = get_credential()
+            refresh()
         else:
             current_track = json_normalize(current_track)
             play_check = current_track['is_playing'].iloc[0]
-            #print(play_check)
             if play_check == False:
                 seconds_per_beat = 10000
                 # Again, this just sets spb to an arbitrary value so that the code can stop the lights if nothing is playing.
@@ -137,7 +187,7 @@ def check_bpm():
                 try:
                     features = json_normalize(spotify.audio_features(current_track))
                 except:
-                    spotify = get_credential()
+                    refresh()
                     features = json_normalize(spotify.audio_features(current_track))
                 tempo = float(features['tempo'].iloc[0])
                 seconds_per_beat = 60/tempo
@@ -145,7 +195,7 @@ def check_bpm():
         ## Also of note for people who haven't seen much music theory, some songs play drums and other beat-like sounds on subdivided intervals. So if the lights don't match the drums, it's because it's matching the tempo and not the actual sounds being played. It should still look good though.
 
 def main():
-    time.sleep(1) # main() starts on a one second sleep so that the check_bpm() function has time to define seconds_per_beat before it's called
+    time.sleep(5) # main() starts on a one second sleep so that the check_bpm() function has time to define seconds_per_beat before it's called
     while True:
         if seconds_per_beat != 10000:
             print(seconds_per_beat)
@@ -205,7 +255,7 @@ brightness = brightness/100
 
 ## Create initial credential and define threads with their target functions
 
-spotify = get_credential()
+spotify = oauth_credential()
 api_thread = Thread(target=check_bpm)
 run_thread = Thread(target=main)
 
